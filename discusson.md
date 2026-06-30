@@ -14,7 +14,7 @@
 
 ## Base Line results:
 
-The baseline model run is given [here](notebooks/dual_panet_baseline.ipynb), run on BRIC dataset.
+The baseline model run is given [here](notebooks/dual_panet_baseline.ipynb), run on BRIC dataset. Kaggle notebook is [here](https://www.kaggle.com/code/soumyajitghosh1729/few-shot-seg).
 
 - The model was trained with eposodic batches of 10 support and and 1 query image.  
 - There were 3 classes in the dataset. We have trained and evaluated independently across 3 folds, in each fold, one of the classed was left out as unseed class to evaluate on and a random episode was selected for each batch for traning from the rest of the two classes.
