@@ -14,6 +14,10 @@ class SpatialEncoder(nn.Module):
         # last 2 layers avg pool and fc layer removed
         self.backbone = nn.Sequential(*list(resnet.children())[:-2])
         
+        # Freeze backbone parameters
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+        
     def forward(self, x):
         return self.backbone(x)
 
@@ -100,6 +104,18 @@ def compute_similarity_map(query_features, prototype):
     return sim_map.unsqueeze(1) # Shape: (B, 1, H, W)
 
 
+def dice_loss(logits, target):
+        # Dice loss on foreground
+        probs = F.softmax(logits, dim=1)[:, 1, :, :] # (B, H, W)
+        target_float = target.float()
+        intersection = (probs * target_float).sum(dim=(1, 2))
+        union = probs.sum(dim=(1, 2)) + target_float.sum(dim=(1, 2))
+        dice_loss = 1.0 - (2.0 * intersection + 1e-5) / (union + 1e-5)
+        dice_loss = dice_loss.mean()
+
+        return dice_loss
+
+
 class DualBranchPANet(nn.Module):
     def __init__(self):
         super().__init__()
@@ -117,18 +133,23 @@ class DualBranchPANet(nn.Module):
     def forward(self, support_img, query_img, fore_mask, back_mask=None, target=None):
         """
         Args:
-            support_img: (B, 3, H, W) - Support image
+            support_img: (B, K, 3, H, W) - Support images
             query_img: (B, 3, H, W) - Query image
-            fore_mask: (B, 1, H, W) - Foreground mask
-            back_mask: (B, 1, H, W) - Background mask (optional)
+            fore_mask: (B, K, 1, H, W) - Foreground mask
+            back_mask: (B, K, 1, H, W) - Background mask (optional)
             target: (B, H, W) - Target mask (optional)
         Returns:
             logits: (B, 2, H, W) - Logits
             loss: (1, ) - Loss
         """
-
+        B, K, C, H, W = support_img.shape
+        support_img = support_img.view(B * K, C, H, W)
+        fore_mask = fore_mask.view(B * K, 1, H, W)
+        
         if back_mask is None:
             back_mask = 1 - fore_mask
+        else:
+            back_mask = back_mask.view(B * K, 1, H, W)
 
         # Extract features for Support Image
         f_s = self.spatial_encoder(support_img)
@@ -139,12 +160,18 @@ class DualBranchPANet(nn.Module):
         q_f = self.freq_encoder(query_img)
         
         # spatial prototypes
-        p_s_fg = masked_pooling(f_s, fore_mask)   # (B, C, 1, 1)
-        p_s_bg = masked_pooling(f_s, back_mask)   # (B, C, 1, 1)
+        p_s_fg = masked_pooling(f_s, fore_mask)   # (B*K, C, 1, 1)
+        p_s_bg = masked_pooling(f_s, back_mask)   # (B*K, C, 1, 1)
 
         # frequency prototypes
-        p_f_fg = masked_pooling(f_f, fore_mask)   # (B, C, 1, 1)
-        p_f_bg = masked_pooling(f_f, back_mask)   # (B, C, 1, 1)
+        p_f_fg = masked_pooling(f_f, fore_mask)   # (B*K, C, 1, 1)
+        p_f_bg = masked_pooling(f_f, back_mask)   # (B*K, C, 1, 1)
+        
+        # aggregate K shots
+        p_s_fg = p_s_fg.view(B, K, -1, 1, 1).mean(dim=1)  # (B, C, 1, 1)
+        p_s_bg = p_s_bg.view(B, K, -1, 1, 1).mean(dim=1)
+        p_f_fg = p_f_fg.view(B, K, -1, 1, 1).mean(dim=1)
+        p_f_bg = p_f_bg.view(B, K, -1, 1, 1).mean(dim=1)
         
         # prototype fusion using MHA
         p_fused_fg = self.prototype_fusion(p_s_fg, p_f_fg)
@@ -176,7 +203,13 @@ class DualBranchPANet(nn.Module):
 
         loss = None
         if target is not None:
-            loss = F.cross_entropy(logits, target.long(), reduction='mean') # (1, )
+            ce_loss = F.cross_entropy(logits, target.long(), reduction='mean') # (1, )
+            
+            # Dice loss on foreground
+            d_loss = dice_loss(logits, target)
+            
+            # Weighted loss
+            loss = ce_loss + 1.0 * d_loss
     
         return logits, loss
 
@@ -186,12 +219,13 @@ if __name__ == "__main__":
     print("Initializing model...")
     model = DualBranchPANet()
     
-    # Create dummy tensors representing a batch of 2 RGB images (256x256)
-    dummy_support_img = torch.randn(2, 3, 256, 256)
-    dummy_query_img = torch.randn(2, 3, 256, 256)
+    # Create dummy tensors representing a batch of 2 RGB images, K=10 shots
+    B, K = 2, 10
+    dummy_support_img = torch.randn(B, K, 3, 256, 256)
+    dummy_query_img = torch.randn(B, 3, 256, 256)
     
     # Create dummy binary masks (foreground and background)
-    fore_mask = torch.randint(0, 2, (2, 1, 256, 256)).float()
+    fore_mask = torch.randint(0, 2, (B, K, 1, 256, 256)).float()
     back_mask = 1.0 - fore_mask
     
     print("Running forward pass...")
