@@ -31,8 +31,8 @@ def main():
     Q = 1   # 1 query
     
     epochs = 1  # Kept low for local testing
-    train_episodes = 150
-    eval_episodes = 100
+    train_episodes = 50
+    eval_episodes = 50
     
     folds = []
     for i, test_class in enumerate(available_classes):
@@ -51,7 +51,7 @@ def main():
         print(f"Evaluating on: {unseen}")
         
         model = DualBranchPANet().to(device)
-        optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=3e-5)
+        optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
         
         train_sampler = EpisodicBatchSampler(dataset.label_to_indices, seen, num_episodes=train_episodes, k_shots=K, q_queries=Q)
         train_loader = DataLoader(dataset, batch_sampler=train_sampler)

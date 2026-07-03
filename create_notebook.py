@@ -44,19 +44,20 @@ import torchvision.transforms as T
 import torchvision.models as models
 
 # --- CONFIGURATION ---
-DATA_ROOT = "/kaggle/input/brisc2025/brisc2025/"  # Update if Kaggle mounts it differently
-MANIFEST_PATH = "/kaggle/input/brisc2025/brisc2025/manifest.csv"
+DATA_ROOT = "/kaggle/input/datasets/briscdataset/brisc2025/brisc2025"  # Update if Kaggle mounts it differently
+MANIFEST_PATH = "/kaggle/input/datasets/briscdataset/brisc2025/brisc2025/manifest.csv"
 
 # Episodic Settings
 K_SHOTS = 10
 Q_QUERIES = 1
-TRAIN_EPISODES_PHASE_1 = 50   # Episodes to run with frozen backbone
-TRAIN_EPISODES_PHASE_2 = 100  # Episodes to run with unfrozen backbone
+TRAIN_EPISODES_PHASE_1 = 70   # Episodes to run with frozen backbone
+TRAIN_EPISODES_PHASE_2 = 300  # Episodes to run with unfrozen backbone
 EVAL_EPISODES = 10            # Episodes to run during evaluation
 
 # Learning Rates
-LR_FROZEN = 1e-4      # Higher LR when backbone is frozen
-LR_UNFROZEN = 1e-5    # 10x lower LR for fine-tuning the un-frozen backbone
+LR_FROZEN = 5e-5      # Higher LR when backbone is frozen
+LR_UNFROZEN = 1e-6    # 10x lower LR for fine-tuning the un-frozen backbone
+gamma = 0.8
 
 def get_device():
     if torch.cuda.is_available():
@@ -71,15 +72,15 @@ print(f"Using device: {device}")"""
 
     # Cell 2: Dataset
     add_markdown("# 2. Dataset & Sampler")
-    dataset_code = read_file("dataset.py").replace('import os', '').replace('import random', '').replace('import pandas as pd', '').replace('from PIL import Image', '').replace('from torch.utils.data import Dataset, Sampler', '').replace('import torchvision.transforms as T', '')
+    dataset_code = read_file("pipeline/dataset.py").replace('import os', '').replace('import random', '').replace('import pandas as pd', '').replace('from PIL import Image', '').replace('from torch.utils.data import Dataset, Sampler', '').replace('import torchvision.transforms as T', '')
     # Replace default paths
-    dataset_code = dataset_code.replace('manifest_path="Data/brisc2025/manifest.csv"', 'manifest_path=MANIFEST_PATH')
-    dataset_code = dataset_code.replace('data_root="Data/brisc2025/"', 'data_root=DATA_ROOT')
+    dataset_code = dataset_code.replace('manifest_path="../Data/brisc2025/manifest.csv"', 'manifest_path=MANIFEST_PATH')
+    dataset_code = dataset_code.replace('data_root="../Data/brisc2025/"', 'data_root=DATA_ROOT')
     add_code(dataset_code.strip())
 
     # Cell 3: Model
     add_markdown("# 3. Dual-Branch PANet Architecture")
-    model_code = read_file("dual_branch_panet.py")
+    model_code = read_file("pipeline/dual_branch_panet.py")
     # Clean up imports
     model_code = model_code.replace('import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport torchvision.models as models\n', '')
     # Remove the `if __name__ == "__main__":` usage block at the bottom

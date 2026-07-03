@@ -4,22 +4,47 @@ import torch.nn.functional as F
 import torchvision.models as models
 
 out_channels = 2048
+gamma = 0.8
 
 # spatial encoder
 class SpatialEncoder(nn.Module):
     def __init__(self):
         super().__init__()
+        
+        # Load pre-trained ResNet50
         resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
 
-        # last 2 layers avg pool and fc layer removed
+        # 1. Modify Layer 3: Change stride from 2 to 1, apply dilation of 2
+        resnet.layer3[0].conv2.stride = (1, 1)
+        resnet.layer3[0].downsample[0].stride = (1, 1)
+        for module in resnet.layer3.modules():
+            if isinstance(module, nn.Conv2d) and module.kernel_size == (3, 3):
+                module.dilation = (2, 2)
+                module.padding = (2, 2)
+
+        # 2. Modify Layer 4: Change stride from 2 to 1, apply dilation of 4
+        resnet.layer4[0].conv2.stride = (1, 1)
+        resnet.layer4[0].downsample[0].stride = (1, 1)
+        for module in resnet.layer4.modules():
+            if isinstance(module, nn.Conv2d) and module.kernel_size == (3, 3):
+                module.dilation = (4, 4)
+                module.padding = (4, 4)
+
+        # Remove the final AvgPool and FC layer
         self.backbone = nn.Sequential(*list(resnet.children())[:-2])
         
-        # Freeze backbone parameters
-        for param in self.backbone.parameters():
-            param.requires_grad = False
+        # Freeze early layers, but leave modified layer3 and layer4 unfrozen
+        for name, param in self.backbone.named_parameters():
+            if 'layer3' in name or 'layer4' in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
         
     def forward(self, x):
+        # Input: (B, 3, 256, 256)
+        # Output: (B, 2048, 32, 32) instead of (B, 2048, 8, 8)
         return self.backbone(x)
+
 
 
 class FrequencyEncoder(nn.Module):
@@ -27,7 +52,7 @@ class FrequencyEncoder(nn.Module):
         super().__init__()
 
         self.conv1 = nn.Conv2d(in_channels * 2, 64, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(64, out_channels, kernel_size=3, padding=1, stride=32) 
+        self.conv2 = nn.Conv2d(64, out_channels, kernel_size=3, padding=1, stride=8) 
         
     def forward(self, x):
         fft_x = torch.fft.fft2(x)
@@ -127,7 +152,8 @@ class DualBranchPANet(nn.Module):
         self.prototype_fusion = PrototypeFusion(channels=channels)
         self.band_weighting = BandWeighting(channels=channels)
         
-        self.fusion_weight = nn.Parameter(torch.tensor(0.5))
+        self.fusion_weight1 = nn.Parameter(torch.tensor(0.25, requires_grad=True))
+        self.fusion_weight2 = nn.Parameter(torch.tensor(0.25, requires_grad=True))
         self.scaler = nn.Parameter(torch.tensor(20.0))
         
     def forward(self, support_img, query_img, fore_mask, back_mask=None, target=None):
@@ -182,15 +208,19 @@ class DualBranchPANet(nn.Module):
         p_f_weighted_bg = self.band_weighting(p_f_bg)
 
         # Simalarity scores
-        spatial_sim_fg = compute_similarity_map(q_s, p_fused_fg)       # (B, 1, H', W')
-        spatial_sim_bg = compute_similarity_map(q_s, p_fused_bg)       # (B, 1, H', W')
+        spatial_sim_fg = compute_similarity_map(q_s, p_s_fg)
+        spatial_sim_bg = compute_similarity_map(q_s, p_s_bg)
+
+        fused_sim_fg = compute_similarity_map(q_s, p_fused_fg)       # (B, 1, H', W')
+        fused_sim_bg = compute_similarity_map(q_s, p_fused_bg)       # (B, 1, H', W')
 
         freq_sim_fg = compute_similarity_map(q_f, p_f_weighted_fg)     # (B, 1, H', W')
         freq_sim_bg = compute_similarity_map(q_f, p_f_weighted_bg)     # (B, 1, H', W')
+
         
         # Similarity score fusion
-        sim_fg = self.fusion_weight * spatial_sim_fg + (1.0 - self.fusion_weight) * freq_sim_fg 
-        sim_bg = self.fusion_weight * spatial_sim_bg + (1.0 - self.fusion_weight) * freq_sim_bg  
+        sim_fg = self.fusion_weight2 * spatial_sim_fg + self.fusion_weight1 * freq_sim_fg + (1 - self.fusion_weight1 - self.fusion_weight2) * spatial_sim_fg
+        sim_bg = self.fusion_weight2 * spatial_sim_bg + self.fusion_weight1 * freq_sim_bg + (1 - self.fusion_weight1 - self.fusion_weight2) * spatial_sim_bg  
         
         logits = torch.cat([sim_bg, sim_fg], dim=1) * self.scaler      # (B, 2, H', W')
         
@@ -209,7 +239,7 @@ class DualBranchPANet(nn.Module):
             d_loss = dice_loss(logits, target)
             
             # Weighted loss
-            loss = ce_loss + 1.0 * d_loss
+            loss = (1 - gamma) * ce_loss + gamma * d_loss
     
         return logits, loss
 

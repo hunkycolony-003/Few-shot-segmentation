@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, Sampler
 import torchvision.transforms as T
 
 class TumorDataset(Dataset):
-    def __init__(self, manifest_path="Data/brisc2025/manifest.csv", data_root="Data/brisc2025/", image_size=(256, 256)):
+    def __init__(self, manifest_path="../Data/brisc2025/manifest.csv", data_root="../Data/brisc2025/", image_size=(256, 256)):
         self.data_root = data_root
         self.image_size = image_size
         
