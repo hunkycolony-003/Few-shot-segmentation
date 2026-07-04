@@ -47,19 +47,54 @@ class SpatialEncoder(nn.Module):
 
 
 
+class LeGall53DWT2D(nn.Module):
+    def __init__(self, in_channels=3):
+        super().__init__()
+        self.in_channels = in_channels
+        
+        # 1D filters
+        Fl = torch.tensor([-1/8, 1/4, 3/4, 1/4, -1/8], dtype=torch.float32)
+        Fh = torch.tensor([0, -1/2, 1, -1/2, 0], dtype=torch.float32)
+        
+        # 2D filters via outer product
+        LL = Fl.unsqueeze(1) * Fl.unsqueeze(0)
+        HL = Fh.unsqueeze(1) * Fl.unsqueeze(0)
+        LH = Fl.unsqueeze(1) * Fh.unsqueeze(0)
+        HH = Fh.unsqueeze(1) * Fh.unsqueeze(0)
+        
+        # Stack filters: shape (4, 1, 5, 5)
+        filters = torch.stack([LL, HL, LH, HH], dim=0).unsqueeze(1)
+        
+        # Repeat for each input channel: shape (4 * in_channels, 1, 5, 5)
+        filters = filters.repeat(in_channels, 1, 1, 1)
+        
+        # Register as buffer so it's moved to the correct device but not updated by optimizer
+        self.register_buffer('filters', filters)
+        
+    def forward(self, x):
+        # x: (B, C, H, W)
+        # groups=in_channels applies the 4 filters to each channel independently
+        # Output: (B, C * 4, H/2, W/2)
+        return F.conv2d(x, self.filters, stride=2, padding=2, groups=self.in_channels)
+
+
 class FrequencyEncoder(nn.Module):
     def __init__(self, in_channels=3, out_channels=out_channels):
         super().__init__()
 
-        self.conv1 = nn.Conv2d(in_channels * 2, 64, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(64, out_channels, kernel_size=3, padding=1, stride=8) 
+        self.dwt = LeGall53DWT2D(in_channels=in_channels)
+        
+        # The DWT outputs in_channels * 4 channels, at half the spatial resolution (H/2, W/2)
+        # We need to reach H/8, W/8. So we need an overall stride of 4 after the DWT.
+        self.conv1 = nn.Conv2d(in_channels * 4, 64, kernel_size=3, padding=1, stride=2)
+        self.conv2 = nn.Conv2d(64, out_channels, kernel_size=3, padding=1, stride=2) 
         
     def forward(self, x):
-        fft_x = torch.fft.fft2(x)
-        x_freq = torch.cat([fft_x.real, fft_x.imag], dim=1)
+        # x: (B, C, H, W)
+        x_dwt = self.dwt(x) # (B, C*4, H/2, W/2)
         
-        x_freq = F.relu(self.conv1(x_freq))
-        x_freq = self.conv2(x_freq) 
+        x_freq = F.relu(self.conv1(x_dwt)) # (B, 64, H/4, W/4)
+        x_freq = self.conv2(x_freq)        # (B, 2048, H/8, W/8)
         return x_freq
 
 
@@ -219,8 +254,8 @@ class DualBranchPANet(nn.Module):
 
         
         # Similarity score fusion
-        sim_fg = self.fusion_weight2 * spatial_sim_fg + self.fusion_weight1 * freq_sim_fg + (1 - self.fusion_weight1 - self.fusion_weight2) * spatial_sim_fg
-        sim_bg = self.fusion_weight2 * spatial_sim_bg + self.fusion_weight1 * freq_sim_bg + (1 - self.fusion_weight1 - self.fusion_weight2) * spatial_sim_bg  
+        sim_fg = self.fusion_weight2 * spatial_sim_fg + self.fusion_weight1 * freq_sim_fg + (1 - self.fusion_weight1 - self.fusion_weight2) * fused_sim_fg
+        sim_bg = self.fusion_weight2 * spatial_sim_bg + self.fusion_weight1 * freq_sim_bg + (1 - self.fusion_weight1 - self.fusion_weight2) * fused_sim_bg  
         
         logits = torch.cat([sim_bg, sim_fg], dim=1) * self.scaler      # (B, 2, H', W')
         
@@ -234,12 +269,60 @@ class DualBranchPANet(nn.Module):
         loss = None
         if target is not None:
             ce_loss = F.cross_entropy(logits, target.long(), reduction='mean') # (1, )
-            
-            # Dice loss on foreground
             d_loss = dice_loss(logits, target)
+            loss_seg = (1 - gamma) * ce_loss + gamma * d_loss
             
-            # Weighted loss
-            loss = (1 - gamma) * ce_loss + gamma * d_loss
+            # --- Prototype Alignment Regularization (PAR) ---
+            # 1. Obtain predicted mask for query
+            pred_mask = F.softmax(logits, dim=1)[:, 1:2, :, :]  # Uses continuous foreground probability            
+            # Since q_s is H', W' and logits is H, W, we need to use nearest neighbor interpolation to downsample pred_mask back to H', W' for masked_pooling
+            pred_mask_ds = F.interpolate(pred_mask, size=q_s.shape[-2:], mode='nearest')
+            pred_back_mask_ds = 1.0 - pred_mask_ds
+            
+            # 2. Extract query prototypes
+            q_s_fg = masked_pooling(q_s, pred_mask_ds)   # (B, C, 1, 1)
+            q_s_bg = masked_pooling(q_s, pred_back_mask_ds)
+            q_f_fg = masked_pooling(q_f, pred_mask_ds)
+            q_f_bg = masked_pooling(q_f, pred_back_mask_ds)
+            
+            # 3. Prototype fusion for query prototypes
+            q_fused_fg = self.prototype_fusion(q_s_fg, q_f_fg)
+            q_fused_bg = self.prototype_fusion(q_s_bg, q_f_bg)
+            
+            # 4. Bandweighting for query frequency prototypes
+            q_f_weighted_fg = self.band_weighting(q_f_fg)
+            q_f_weighted_bg = self.band_weighting(q_f_bg)
+            
+            # 5. Calculate similarities for support image using query prototypes
+            # Expand query prototypes to match B*K support images
+            q_s_fg_exp = q_s_fg.repeat_interleave(K, dim=0)
+            q_s_bg_exp = q_s_bg.repeat_interleave(K, dim=0)
+            q_fused_fg_exp = q_fused_fg.repeat_interleave(K, dim=0)
+            q_fused_bg_exp = q_fused_bg.repeat_interleave(K, dim=0)
+            q_f_weighted_fg_exp = q_f_weighted_fg.repeat_interleave(K, dim=0)
+            q_f_weighted_bg_exp = q_f_weighted_bg.repeat_interleave(K, dim=0)
+            
+            par_spatial_sim_fg = compute_similarity_map(f_s, q_s_fg_exp)
+            par_spatial_sim_bg = compute_similarity_map(f_s, q_s_bg_exp)
+            par_fused_sim_fg = compute_similarity_map(f_s, q_fused_fg_exp)
+            par_fused_sim_bg = compute_similarity_map(f_s, q_fused_bg_exp)
+            par_freq_sim_fg = compute_similarity_map(f_f, q_f_weighted_fg_exp)
+            par_freq_sim_bg = compute_similarity_map(f_f, q_f_weighted_bg_exp)
+            
+            # 6. Fusion
+            par_sim_fg = self.fusion_weight2 * par_spatial_sim_fg + self.fusion_weight1 * par_freq_sim_fg + (1 - self.fusion_weight1 - self.fusion_weight2) * par_fused_sim_fg
+            par_sim_bg = self.fusion_weight2 * par_spatial_sim_bg + self.fusion_weight1 * par_freq_sim_bg + (1 - self.fusion_weight1 - self.fusion_weight2) * par_fused_sim_bg
+            
+            par_logits = torch.cat([par_sim_bg, par_sim_fg], dim=1) * self.scaler # (B*K, 2, H', W')
+            par_logits = F.interpolate(par_logits, size=support_img.shape[-2:], mode='bilinear', align_corners=False)
+            
+            # 7. PAR Loss against support ground truth
+            support_target = fore_mask.squeeze(1) # (B*K, H, W)
+            par_ce_loss = F.cross_entropy(par_logits, support_target.long(), reduction='mean')
+            par_d_loss = dice_loss(par_logits, support_target)
+            loss_par = (1 - gamma) * par_ce_loss + gamma * par_d_loss
+            
+            loss = 0.5 * (loss_seg + loss_par)
     
         return logits, loss
 

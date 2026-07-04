@@ -12,7 +12,7 @@
 3. For teh prototype fusion, MHA is used between the spatial and frequency prototypes, where the Q = spatial_prototype, K,V = frequency_prototype. This is an arbirrary choice and different combinations may be tried
 
 
-## Base Line results:
+## Base Line:
 
 The baseline model run is given [here](notebooks/dual_panet_baseline.ipynb), run on BRIC dataset. Kaggle notebook is [here](https://www.kaggle.com/code/soumyajitghosh1729/few-shot-seg).
 
@@ -25,3 +25,43 @@ The baseline model run is given [here](notebooks/dual_panet_baseline.ipynb), run
   - Fold 1 Results -> mIoU: 0.0631, Dice: 0.1080 
   - Fold 2 Results -> mIoU: 0.1080, Dice: 0.1711 
   - Fold 3 Results -> mIoU: 0.0014, Dice: 0.0027
+
+
+## improving stride:
+
+Notebook can be found [here](notebooks/feature%20s_stride_8.ipynb).
+Kaggle run is given [here](https://www.kaggle.com/code/soumyajitghosh1729/few-shot-seg?scriptVersionId=332386701)
+
+- The resnet architecture is modified so that the feature dimension is 1/8 of the original image instead of the previous shrink of 1/32, o that more spatial information of tha image is preserved.
+
+- results for the 3 folds:
+
+   - Fold 1 Results -> mIoU: 0.0982, Dice: 0.1717 
+   - Fold 2 Results -> mIoU: 0.0503, Dice: 0.0929
+   - Fold 3 Results -> mIoU: 0.0525, Dice: 0.0937
+
+## DWT based frequency encoder:
+
+Notebook can be found [here](notebooks/LeGall53DWT2D_encoder.ipynb). The kaggle run is [here](https://www.kaggle.com/code/soumyajitghosh1729/few-shot-seg?scriptVersionId=332499409)
+
+- The frequency encoder, earlier fft, is replaced by [LeGall 5/3 Discrete Wavelet Transform](https://arxiv.org/pdf/2205.03898).
+
+- results for the 3 folds:
+   - Fold 1 Results -> mIoU: 0.0727, Dice: 0.1230
+   - Fold 2 Results -> mIoU: 0.0851, Dice: 0.1271
+   - Fold 3 Results -> mIoU: 0.1356, Dice: 0.2068
+
+## Enabling PAR training:
+
+Notebook is found [here](notebooks/par_training.ipynb)
+. The kaggle run is given [here](https://www.kaggle.com/code/soumyajitghosh1729/few-shot-seg?scriptVersionId=332502554)
+
+- A  Prototype alignment regularization (PAR) training method is used as per the [PANet paper](https://arxiv.org/pdf/1908.06391).
+
+- Results for the 3 folds:
+   - Fold 1 Results -> mIoU: 0.3388, Dice: 0.4259
+   - Fold 2 Results -> mIoU: 0.3422, Dice: 0.4488
+   - Fold 3 Results -> mIoU: 0.2497, Dice: 0.3398
+
+
+
