@@ -43,6 +43,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from torch.utils.data import Dataset, DataLoader
+from scipy.ndimage import binary_erosion
+from scipy.spatial import cKDTree
 
 import albumentations as A
 from albumentations.pytorch import ToTensorV2

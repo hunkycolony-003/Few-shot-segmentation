@@ -96,6 +96,36 @@ def total_loss(outputs: dict, query_mask: torch.Tensor,
         'align': L_align,
     }
 
+def compute_hd95(pred: np.ndarray, target: np.ndarray) -> float:
+    """Compute 95th percentile Hausdorff Distance for a single 2D image."""
+    if np.sum(pred) == 0 and np.sum(target) == 0:
+        return 0.0
+    if np.sum(pred) == 0 or np.sum(target) == 0:
+        return 256.0 # Max typical distance
+        
+    pred_edges = pred ^ binary_erosion(pred, structure=np.ones((3,3)))
+    target_edges = target ^ binary_erosion(target, structure=np.ones((3,3)))
+    
+    pred_pts = np.argwhere(pred_edges)
+    target_pts = np.argwhere(target_edges)
+    
+    if len(pred_pts) == 0 or len(target_pts) == 0:
+        return 256.0
+        
+    tree_pred = cKDTree(pred_pts)
+    tree_target = cKDTree(target_pts)
+    
+    dist_pred_to_target, _ = tree_target.query(pred_pts)
+    dist_target_to_pred, _ = tree_pred.query(target_pts)
+    
+    if len(dist_pred_to_target) == 0 or len(dist_target_to_pred) == 0:
+        return 256.0
+        
+    hd95_val = max(np.percentile(dist_pred_to_target, 95), 
+                   np.percentile(dist_target_to_pred, 95))
+    return float(hd95_val)
+
+
 def compute_metrics(pred_probs: np.ndarray, targets: np.ndarray) -> dict:
     """
     Binary segmentation metrics.
@@ -118,8 +148,11 @@ def compute_metrics(pred_probs: np.ndarray, targets: np.ndarray) -> dict:
     sens = tp / (tp + fn + 1e-7)
     spec = tn / (tn + fp + 1e-7)
 
+    hd95_list = [compute_hd95(preds[i], tgts[i]) for i in range(preds.shape[0])]
+    hd95 = float(np.mean(hd95_list)) if hd95_list else 0.0
+
     return dict(dice=float(dice), iou=float(iou),
-                sensitivity=float(sens), specificity=float(spec))
+                sensitivity=float(sens), specificity=float(spec), hd95=float(hd95))
 
 
 @torch.no_grad()
@@ -306,7 +339,8 @@ def train_freqfss(config, dataset_name: str, epochs: int = None, make_episode_lo
                 f"Val Dice {val_metrics['dice']:.4f} "
                 f"IoU {val_metrics['iou']:.4f} "
                 f"Sens {val_metrics['sensitivity']:.4f} "
-                f"Spec {val_metrics['specificity']:.4f}"
+                f"Spec {val_metrics['specificity']:.4f} "
+                f"HD95 {val_metrics['hd95']:.4f}"
             )
 
             # Save best checkpoint
@@ -350,6 +384,7 @@ def train_freqfss(config, dataset_name: str, epochs: int = None, make_episode_lo
     print(f"  IoU         : {test_metrics['iou']:.4f}")
     print(f"  Sensitivity : {test_metrics['sensitivity']:.4f}")
     print(f"  Specificity : {test_metrics['specificity']:.4f}")
+    print(f"  HD95        : {test_metrics['hd95']:.4f}")
     print(f"{'═'*65}\n")
 
     # Save results
