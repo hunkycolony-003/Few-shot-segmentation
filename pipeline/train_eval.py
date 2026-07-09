@@ -346,15 +346,18 @@ def train_freqfss(config, dataset_name: str, epochs: int = None, make_episode_lo
             # Save best checkpoint
             if val_metrics['dice'] > best_val_dice:
                 best_val_dice = val_metrics['dice']
-                save_model = model.module if hasattr(model, 'module') else model
-                torch.save({
-                    'epoch':      epoch,
-                    'state_dict': save_model.state_dict(),
-                    'optimizer':  optimizer.state_dict(),
-                    'val_metrics': val_metrics,
-                    'config':     config.__dict__,
-                }, best_model_path)
-                print(f"  ✓ Best model saved (Val Dice {best_val_dice:.4f})")
+                if getattr(config, 'SAVE_MODEL', True):
+                    save_model = model.module if hasattr(model, 'module') else model
+                    torch.save({
+                        'epoch':      epoch,
+                        'state_dict': save_model.state_dict(),
+                        'optimizer':  optimizer.state_dict(),
+                        'val_metrics': val_metrics,
+                        'config':     config.__dict__,
+                    }, best_model_path)
+                    print(f"  ✓ Best model saved (Val Dice {best_val_dice:.4f})")
+                else:
+                    print(f"  ✓ Best model identified (Val Dice {best_val_dice:.4f}) [Skipping save for local run]")
         else:
             print(
                 f"Epoch {epoch:3d}/{config.EPOCHS} | "

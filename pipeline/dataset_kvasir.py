@@ -30,7 +30,7 @@ class Config:
     LR              = 1e-4
     LR_MIN          = 1e-6
     WEIGHT_DECAY    = 1e-4
-    BATCH_SIZE      = 1     
+    BATCH_SIZE      = 2     
     NUM_WORKERS     = 0
     PIN_MEMORY      = False
 
@@ -225,6 +225,7 @@ if __name__ == '__main__':
     config.EPISODES_VAL = 1
     config.EPISODES_TEST = 1
     config.FREEZE_BACKBONE = True
+    config.SAVE_MODEL = False
     config.DATA_PATH = os.environ.get(
         'FREQFSS_DATA',
         'Data/kvasir-dataset-for-classification-and-segmentation/kvasir-seg/Kvasir-SEG'
